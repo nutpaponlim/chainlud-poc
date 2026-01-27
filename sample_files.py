@@ -24,11 +24,9 @@ USAGE:
 
 import os
 from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
 from azure.ai.projects import AIProjectClient
 from pathlib import Path
 
-load_dotenv()
 
 endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"]
 script_dir = Path(__file__).parent
