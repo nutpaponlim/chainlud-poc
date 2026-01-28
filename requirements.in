@@ -1,0 +1,17 @@
+# Azure Agent package (exact version)
+azure-ai-agents==1.2.0b5
+
+# Your top-level deps that you intentionally want
+fastapi
+uvicorn
+openai
+anthropic
+
+python-dotenv
+requests
+pydantic
+pydantic-settings
+
+chainlit
+agent-framework-core
+agent-framework-azure-ai
