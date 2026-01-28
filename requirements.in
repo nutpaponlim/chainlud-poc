@@ -1,5 +1,8 @@
 # Azure Agent package (exact version)
 azure-ai-agents==1.2.0b5
+azure-storage-blob
+azure-cosmos
+six
 
 # Your top-level deps that you intentionally want
 fastapi

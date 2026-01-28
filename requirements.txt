@@ -55,14 +55,19 @@ azure-core==1.37.0
     # via
     #   azure-ai-agents
     #   azure-ai-projects
+    #   azure-cosmos
     #   azure-identity
     #   azure-storage-blob
+azure-cosmos==4.14.5
+    # via -r requirements.in
 azure-identity==1.15.0
     # via
     #   agent-framework-core
     #   azure-ai-projects
 azure-storage-blob==12.17.0
-    # via azure-ai-projects
+    # via
+    #   -r requirements.in
+    #   azure-ai-projects
 bidict==0.23.1
     # via python-socketio
 certifi==2025.11.12
@@ -532,6 +537,8 @@ shellingham==1.5.4
     # via huggingface-hub
 simple-websocket==1.1.0
     # via python-engineio
+six==1.17.0
+    # via -r requirements.in
 sniffio==1.3.1
     # via
     #   anthropic
@@ -569,6 +576,7 @@ typing-extensions==4.15.0
     #   anyio
     #   azure-ai-agents
     #   azure-core
+    #   azure-cosmos
     #   azure-storage-blob
     #   fastapi
     #   grpcio
