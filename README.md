@@ -1,2 +1,0 @@
-# chainlud-poc
-chainlud-poc

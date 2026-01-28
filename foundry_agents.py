@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
 from settings import settings
 
 
@@ -18,7 +18,14 @@ def get_project_and_openai_clients():
 
 
 def list_agent_names(limit: int = 10) -> list[str]:
-    with DefaultAzureCredential() as cred, AIProjectClient(endpoint=settings.PROJECT_ENDPOINT, credential=cred) as project:
+    # try:
+    credential = DefaultAzureCredential()
+        # Check if the credential works
+    credential.get_token("https://management.azure.com/.default")
+    # except Exception as ex:
+        # Fall back to interactive mode if the default chain fails
+        # credential = InteractiveBrowserCredential()
+    with AIProjectClient(endpoint=settings.PROJECT_ENDPOINT, credential=credential) as project:
         names = []
         for a in project.agents.list():
             names.append(a)
@@ -26,6 +33,7 @@ def list_agent_names(limit: int = 10) -> list[str]:
                 break
         # return names
         return names
+
 
 def get_agent_by_name(project_client: AIProjectClient, agent_name: str):
     # Your code proves this works:

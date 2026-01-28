@@ -1,157 +1,3 @@
-# import chainlit as cl
-# from azure.identity import DefaultAzureCredential
-# from azure.ai.projects import AIProjectClient
-# from settings import settings
-# from foundry_agents import list_agent_names
-# import os
-# import asyncio
-# import chainlit.data as cl_data
-# from typing import Optional
-# from datetime import datetime, timezone
-# from dotenv import load_dotenv
-
-# from chainlit.types import ThreadDict
-# from cosmos_data_layer import CosmosDBDataLayer
-
-# import logging
-# logger = logging.getLogger(__name__)
-# # from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
-
-# data_layer = None
-
-# def setup_data_layer():
-#     """Initializes and returns the CosmosDBDataLayer instance."""
-#     cosmos_endpoint = settings.Azure_Cosmos_Endpoint
-#     cosmos_key = settings.Azure_Cosmos_KEY
-#     database_name = settings.Azuredb
-    
-#     if not cosmos_endpoint or not cosmos_key:
-#         raise ValueError("Missing Cosmos DB credentials in config.")
-    
-#     return CosmosDBDataLayer(
-#         endpoint=cosmos_endpoint,
-#         key=cosmos_key,
-#         database_name=database_name
-#     )
-
-# try:
-#     data_layer = setup_data_layer()
-#     cl_data._data_layer = data_layer
-# except Exception as e:
-#     logger.error(f"Failed to initialize Cosmos DB data layer: {e}")
-#     import traceback
-#     traceback.print_exc()
-
-# @cl.set_chat_profiles
-# async def chat_profiles():
-#     agent_list = list_agent_names(limit=10)
-#     logger.info(f"Retrieved {len(agent_list)} agents.")
-#     profiles = []
-#     for agent in agent_list:
-#         profiles.append(
-#             cl.ChatProfile(
-#                 name=agent.name,
-#                 markdown_description=f"Agent: {agent.name} \n \
-#                 Model: {agent.versions.latest.definition.model} \n \
-#                 Description: {agent.versions.latest.description}",
-#             )
-#         )
-#     return profiles
-
-
-# @cl.password_auth_callback
-# def auth_callback(username: str, password: str):
-#     username = username.strip().lower()
-#     password = password.strip()
-
-#     if username == "admin" and password == "admin":
-#         logger.info(f"User '{username}' authenticated successfully.")
-#         display_name = username.split('@')[0].title() if '@' in username else username.title()
-#         return cl.User(identifier=username, display_name=display_name)
-#     logger.warning(f"Authentication failed for user '{username}'. Invalid credentials.")
-#     return None
-
-# @cl.on_chat_resume
-# async def on_chat_resume(thread):
-#     pass
-
-
-
-# @cl.on_chat_start
-# async def on_chat_start():
-#     global data_layer
-#     if not data_layer:
-#         logger.error("Data layer is not initialized. Cannot proceed with chat start.")
-#         return
-
-#     app_user = cl.user_session.get("user")
-#     await cl.Message(f"Hello {app_user.identifier}").send()
-
-#     agent_name = cl.user_session.get("chat_profile")
-#     if not agent_name:
-#         await cl.Message(content="No agent selected.").send()
-#         return
-
-#     cl.user_session.set("agent_name", agent_name)
-#     cl.user_session.set("conversation_id", None)
-
-#     await cl.Message(content=f"Starting chat using **{agent_name}**").send()
-
-
-# @cl.on_message
-# async def on_message(message: cl.Message):
-#     text = (message.content or "").strip()
-
-#     agent_name = cl.user_session.get("agent_name")
-#     conversation_id = cl.user_session.get("conversation_id")
-    
-#     # Create an empty assistant message we will stream into
-#     out = await cl.Message(content="").send()
-
-#     with (
-#         DefaultAzureCredential() as credential,
-#         AIProjectClient(endpoint=settings.PROJECT_ENDPOINT, credential=credential) as project_client,
-#         project_client.get_openai_client() as openai_client,
-#     ):
-#         files = message.elements
-#         if files:
-#             await out.stream_token(f"Received {len(files)} file(s). Currently, file handling is not implemented.\n")
-
-#         # Create or continue conversation
-#         if not conversation_id:
-#             conversation = openai_client.conversations.create(
-#                 items=[{"type": "message", "role": "user", "content": text}],
-#             )
-#             conversation_id = conversation.id
-#             cl.user_session.set("conversation_id", conversation_id)
-#         else:
-#             openai_client.conversations.items.create(
-#                 conversation_id=conversation_id,
-#                 items=[{"type": "message", "role": "user", "content": text}],
-#             )
-
-#         # ✅ TRUE streaming
-#         final_text_parts = []
-
-#         with openai_client.responses.create(
-#             conversation=conversation_id,
-#             extra_body={"agent": {"name": agent_name, "type": "agent_reference"}},
-#             input="",
-#             stream=True,
-#         ) as response_stream_events:
-
-#             for event in response_stream_events:
-#                 # The important event for token streaming
-#                 if event.type == "response.output_text.delta":
-#                     delta = event.delta or ""
-#                     final_text_parts.append(delta)
-#                     await out.stream_token(delta)
-                    
-#     # Ensure message is finalized in UI
-#     out.content = "".join(final_text_parts)
-#     await out.update()
-
-
 import logging
 from typing import Optional
 
@@ -244,14 +90,14 @@ async def on_chat_end():
 # -----------------------------
 # Profiles + auth
 # -----------------------------
-# AGENT_PROFILES = None
+AGENT_PROFILES = None
 
 @cl.set_chat_profiles
 async def chat_profiles():
-    # global AGENT_PROFILES
+    global AGENT_PROFILES
 
-    # if AGENT_PROFILES is not None:
-        # return AGENT_PROFILES
+    if AGENT_PROFILES is not None:
+        return AGENT_PROFILES
     
     # list_agent_names looks synchronous; run it off the event loop.
     agent_list = await cl.make_async(list_agent_names)(limit=10)
