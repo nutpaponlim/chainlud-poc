@@ -29,6 +29,7 @@ def list_agent_names(limit: int = 10) -> list[str]:
         names = []
         for a in project.agents.list():
             names.append(a)
+            # print(a)
             if len(names) >= limit:
                 break
         # return names

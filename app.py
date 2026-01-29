@@ -1,14 +1,22 @@
 import logging
+import os
 from typing import Optional
 
 import chainlit as cl
 import chainlit.data as cl_data
+from chainlit.types import ThreadDict
+
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 
 from settings import settings
 from foundry_agents import list_agent_names
 from cosmos_data_layer import CosmosDBDataLayer
+from file_handler import csv_to_agent_payload, MAX_ROWS_TO_SEND
+
+import csv
+import json
+import io
 
 logger = logging.getLogger(__name__)
 # Silence Cosmos DB SDK logs
@@ -107,8 +115,9 @@ async def chat_profiles():
             name=a.name,
             markdown_description=(
                 f"**Agent:** {a.name}\n\n"
-                f"**Model:** {a.versions.latest.definition.model}\n\n"
+                f"**Model:** {getattr(a.versions.latest.definition, 'model', 'N/A')}\n\n"
                 f"**Description:** {a.versions.latest.description}"
+                # default=True
             ),
         )
         for a in agent_list
@@ -118,36 +127,55 @@ async def chat_profiles():
     return AGENT_PROFILES
 
 
+# @cl.password_auth_callback
+# def auth_callback(username: str, password: str):
+#     # Fetch the user matching username from your database
+#     # and compare the hashed password with the value stored in the database
+#     if (username, password) == ("admin", "admin"):
+#         # ADD cl.user_session.get("user")
+#         return cl.User(
+#             identifier="admin", metadata={"role": "admin", "provider": "credentials"}
+#         )
+#     else:
+#         return None
+
 @cl.password_auth_callback
-def auth_callback(username: str, password: str):
-    username = (username or "").strip().lower()
-    password = (password or "").strip()
+def auth_callback(username: str, password: str) -> Optional[cl.User]:
+    """
+    Authenticates the user.
+    """
+    username = username.strip().lower()
+    password = password.strip()
 
-    # ⚠️ Replace with real auth (env vars, SSO, etc.)
     if username == "admin" and password == "admin":
-        display_name = username.split("@")[0].title() if "@" in username else username.title()
-        logger.info("User '%s' authenticated.", username)
+        logger.info(f"User '{username}' authenticated successfully.")
+        display_name = username.split('@')[0].title() if '@' in username else username.title()
         return cl.User(identifier=username, display_name=display_name)
-
-    logger.warning("Authentication failed for user '%s'.", username)
+    logger.warning(f"Authentication failed for user '{username}'. Invalid credentials.")
     return None
-
 
 @cl.on_chat_start
 async def on_chat_start():
-    # Data layer is optional; if you *require* it, check cl_data._data_layer
-    user = cl.user_session.get("user")
-    await cl.Message(f"Hello {user.identifier}").send()
+    if not cl.user_session.get("initialized"):
+        # Run initialization code here
+        cl.user_session.set("initialized", True)
+        # Data layer is optional; if you *require* it, check cl_data._data_layer
+        # Chainlit injects the authenticated user here (after auth succeeds)
+        user = cl.user_session.get("user")
 
-    agent_name = cl.user_session.get("chat_profile")
-    if not agent_name:
-        await cl.Message(content="No agent selected.").send()
-        return
+        # Optionally store convenience fields in the session
+        if user:
+            cl.user_session.set("user_id", user.identifier)
+            cl.user_session.set("role", (user.metadata or {}).get("role"))
 
-    cl.user_session.set("agent_name", agent_name)
-    cl.user_session.set("conversation_id", None)
+        agent_name = cl.user_session.get("chat_profile")
+        if not agent_name:
+            agent_name = settings.DEFAULT_AGENT_NAME
 
-    await cl.Message(content=f"Starting chat using **{agent_name}**").send()
+        cl.user_session.set("agent_name", agent_name)
+        cl.user_session.set("conversation_id", None)
+
+        await cl.Message(content=f"Starting chat using **{agent_name}**").send()
 
 
 # -----------------------------
@@ -157,7 +185,9 @@ async def on_chat_start():
 @cl.on_message
 async def on_message(message: cl.Message):
     text = (message.content or "").strip()
-    if not text and not message.elements:
+
+    # If nothing at all, do nothing
+    if not text and not files:
         return
 
     agent_name = cl.user_session.get("agent_name")
@@ -172,33 +202,59 @@ async def on_message(message: cl.Message):
         ctx = get_azure_ctx()
         openai_client = ctx.openai_client
 
-        # Notify about files (still not implemented)
+        # Build the user payload that will be written into the conversation
+        user_payload_parts: list[str] = []
+        if text:
+            user_payload_parts.append(text)
+
+        # --- File handling (first file only) ---
         files = message.elements or []
         if files:
-            await out.stream_token(
-                f"Received {len(files)} file(s). File handling is not implemented yet.\n\n"
-            )
+            file = files[0]
+            file_ext = os.path.splitext(file.name)[1].lower()
 
-        # Create or continue conversation
+            if file_ext != ".csv":
+                await cl.Message(content=f"File type '{file_ext}' is not supported.").send()
+                return
+
+            payload = csv_to_agent_payload(file.path, file.name)
+            user_payload_parts.append(payload)
+
+            await cl.Message(
+                content=f"Received CSV: **{file.name}**. Sent summary + up to {MAX_ROWS_TO_SEND} sample rows to agent."
+            ).send()
+
+
+        user_payload = "\n\n".join(user_payload_parts).strip()
+        if not user_payload:
+            # This should be rare, but keep it safe
+            await cl.Message(content="Nothing to send.").send()
+            return
+
+        # --- Create or continue conversation ---
         if not conversation_id:
             conversation = openai_client.conversations.create(
-                items=[{"type": "message", "role": "user", "content": text}],
+                items=[{"type": "message", "role": "user", "content": user_payload}],
             )
             conversation_id = conversation.id
             cl.user_session.set("conversation_id", conversation_id)
         else:
             openai_client.conversations.items.create(
                 conversation_id=conversation_id,
-                items=[{"type": "message", "role": "user", "content": text}],
+                items=[{"type": "message", "role": "user", "content": user_payload}],
             )
 
         final_parts: list[str] = []
 
-        # Stream response tokens
+        logger.info("[DEV-LOG] Conversation_id=%s", conversation_id)
+        logger.info("[DEV-LOG] Session_id=%s", cl.user_session.get("id"))
+        logger.info("[DEV-LOG] Thread_id=%s", cl.context.session.thread_id)
+
+        # --- Stream response ---
         with openai_client.responses.create(
             conversation=conversation_id,
             extra_body={"agent": {"name": agent_name, "type": "agent_reference"}},
-            input="",
+            input="",   # ok because we already wrote the user message into the conversation
             stream=True,
         ) as events:
             for event in events:
@@ -216,3 +272,21 @@ async def on_message(message: cl.Message):
         await out.stream_token(f"\n\n⚠️ Error: {type(e).__name__}: {e}")
         out.content = (out.content or "") + f"\n\n⚠️ Error: {type(e).__name__}: {e}"
         await out.update()
+
+# @cl.on_chat_resume
+# async def on_chat_resume(thread: ThreadDict):
+#     logger.info("Resuming chat thread %s", thread.id)
+#     pass
+#     # thread is a ThreadDict loaded from your persistence layer
+#     meta = (thread.get("metadata") or {})
+#     conv_id = meta.get("conversation_id")
+#     agent_name = meta.get("agent_name")
+
+#     if conv_id:
+#         cl.user_session.set("conversation_id", conv_id)
+#     if agent_name:
+#         cl.user_session.set("agent_name", agent_name)
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict):
+    logger.info("Resuming chat thread %s", thread.id)

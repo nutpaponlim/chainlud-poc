@@ -30,5 +30,11 @@ class Settings(BaseModel):
     Azure_Cosmos_KEY: str = os.getenv("Azure_Cosmos_KEY", "")
     Azuredb: str = os.getenv("Azuredb", "")
 
+    # OpenTelemetry
+    ENABLE_OTEL_CONSOLE: bool = os.getenv("ENABLE_OTEL_CONSOLE") == True
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: bool = os.getenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT") == True
+
+
 # Single shared settings object
 settings = Settings()
