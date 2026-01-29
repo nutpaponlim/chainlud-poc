@@ -17,7 +17,7 @@ def get_project_and_openai_clients():
     return credential, project_client, openai_client
 
 
-def list_agent_names(limit: int = 10) -> list[str]:
+def list_agent_names(limit: int = 30) -> list[str]:
     # try:
     credential = DefaultAzureCredential()
         # Check if the credential works
