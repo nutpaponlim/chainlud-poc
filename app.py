@@ -108,7 +108,7 @@ async def chat_profiles():
         # return AGENT_PROFILES
     
     # list_agent_names looks synchronous; run it off the event loop.
-    agent_list = await cl.make_async(list_agent_names)(limit=10)
+    agent_list = await cl.make_async(list_agent_names)(limit=30)
 
     AGENT_PROFILES = [
         cl.ChatProfile(
