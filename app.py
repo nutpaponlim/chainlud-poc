@@ -104,8 +104,8 @@ AGENT_PROFILES = None
 async def chat_profiles():
     global AGENT_PROFILES
 
-    if AGENT_PROFILES is not None:
-        return AGENT_PROFILES
+    # if AGENT_PROFILES is not None:
+        # return AGENT_PROFILES
     
     # list_agent_names looks synchronous; run it off the event loop.
     agent_list = await cl.make_async(list_agent_names)(limit=10)
