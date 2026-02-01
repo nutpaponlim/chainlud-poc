@@ -11,39 +11,40 @@ from azure.identity import DefaultAzureCredential
 
 from settings import settings
 from foundry_agents import list_agent_names
-from cosmos_data_layer import CosmosDBDataLayer
+# from cosmos_data_layer import CosmosDBDataLayer
+import chainlit as cl
+from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+from chainlit.data.storage_clients.azure import AzureStorageClient
+
 from file_handler import csv_to_agent_payload, MAX_ROWS_TO_SEND
+# from healper_plot_csv import run_graph_drawer, chainlit_file_from_local
 
 import csv
 import json
 import io
+import asyncio
 
 logger = logging.getLogger(__name__)
 # Silence Cosmos DB SDK logs
-logging.getLogger("azure.cosmos").setLevel(logging.WARNING)
+# logging.getLogger("azure.cosmos").setLevel(logging.WARNING)
 logging.getLogger("azure.core.pipeline").setLevel(logging.WARNING)
 logging.getLogger("azure.identity").setLevel(logging.WARNING)
-# -----------------------------
-# Data layer init (Cosmos)
-# -----------------------------
 
-def setup_data_layer() -> CosmosDBDataLayer:
-    endpoint = settings.Azure_Cosmos_Endpoint
-    key = settings.Azure_Cosmos_KEY
-    db_name = settings.Azuredb
+@cl.data_layer
+def get_data_layer():
+    DB_CONN_INFO = settings.DATABASE_URL
 
-    if not endpoint or not key or not db_name:
-        raise ValueError("Missing Cosmos DB config (endpoint/key/database_name).")
-
-    return CosmosDBDataLayer(endpoint=endpoint, key=key, database_name=db_name)
-
-try:
-    cl_data._data_layer = setup_data_layer()
-    logger.info("Cosmos DB data layer initialized.")
-except Exception:
-    logger.exception("Failed to initialize Cosmos DB data layer.")
-    # Leave Chainlit without a data layer rather than crashing import time.
-
+    if not DB_CONN_INFO:
+        logger.info(f"Missing DATABASE_URL environment variable for database connection.")
+        return None
+    try:
+        # storage_client = AzureStorageClient(account_url="<your_account_url>", container="<your_container>")
+        # return SQLAlchemyDataLayer(conninfo="<your conninfo>", storage_provider=storage_client)
+        data_layer = SQLAlchemyDataLayer(conninfo=DB_CONN_INFO)
+        return data_layer
+    except Exception as e:      
+        logger.exception("Failed to initialize SQLAlchemy data layer.")
+        return None
 
 # -----------------------------
 # Azure client lifecycle
@@ -99,45 +100,38 @@ async def on_chat_end():
 # Profiles + auth
 # -----------------------------
 AGENT_PROFILES = None
+_profiles_lock = asyncio.Lock()
 
 @cl.set_chat_profiles
 async def chat_profiles():
     global AGENT_PROFILES
 
-    # if AGENT_PROFILES is not None:
-        # return AGENT_PROFILES
+    # Fast path: already cached (per process)
+    if AGENT_PROFILES is not None:
+        return AGENT_PROFILES
+
+    # Prevent duplicate builds when multiple requests hit at once
+    async with _profiles_lock:
+        if AGENT_PROFILES is not None:
+            return AGENT_PROFILES
+
+        agent_list = await cl.make_async(list_agent_names)(limit=30)
+
+        AGENT_PROFILES = [
+            cl.ChatProfile(
+                name=a.name,
+                markdown_description=(
+                    f"**Agent:** {a.name}\n\n"
+                    f"**Model:** {getattr(a.versions.latest.definition, 'model', 'N/A')}\n\n"
+                    f"**Description:** {a.versions.latest.description}"
+                ),
+            )
+            for a in agent_list
+        ]
+
+        logger.info("Retrieved %d agents.", len(AGENT_PROFILES))
+        return AGENT_PROFILES
     
-    # list_agent_names looks synchronous; run it off the event loop.
-    agent_list = await cl.make_async(list_agent_names)(limit=30)
-
-    AGENT_PROFILES = [
-        cl.ChatProfile(
-            name=a.name,
-            markdown_description=(
-                f"**Agent:** {a.name}\n\n"
-                f"**Model:** {getattr(a.versions.latest.definition, 'model', 'N/A')}\n\n"
-                f"**Description:** {a.versions.latest.description}"
-                # default=True
-            ),
-        )
-        for a in agent_list
-    ]
-
-    logger.info("Retrieved %d agents.", len(AGENT_PROFILES))
-    return AGENT_PROFILES
-
-
-# @cl.password_auth_callback
-# def auth_callback(username: str, password: str):
-#     # Fetch the user matching username from your database
-#     # and compare the hashed password with the value stored in the database
-#     if (username, password) == ("admin", "admin"):
-#         # ADD cl.user_session.get("user")
-#         return cl.User(
-#             identifier="admin", metadata={"role": "admin", "provider": "credentials"}
-#         )
-#     else:
-#         return None
 
 @cl.password_auth_callback
 def auth_callback(username: str, password: str) -> Optional[cl.User]:
@@ -185,6 +179,7 @@ async def on_chat_start():
 @cl.on_message
 async def on_message(message: cl.Message):
     text = (message.content or "").strip()
+    files = message.elements or []
 
     # If nothing at all, do nothing
     if not text and not files:
@@ -202,59 +197,81 @@ async def on_message(message: cl.Message):
         ctx = get_azure_ctx()
         openai_client = ctx.openai_client
 
-        # Build the user payload that will be written into the conversation
-        user_payload_parts: list[str] = []
-        if text:
-            user_payload_parts.append(text)
-
-        # --- File handling (first file only) ---
-        files = message.elements or []
+        # --- special path: agent-drawer + csv => plot ---
         if files:
             file = files[0]
             file_ext = os.path.splitext(file.name)[1].lower()
-
-            if file_ext != ".csv":
+            if file_ext == ".csv":
                 await cl.Message(content=f"File type '{file_ext}' is not supported.").send()
                 return
+        # --- SPECIAL: graph-drawer always tries to draw ---
+        # if agent_name == "graph-drawer":
+        #     csv_path = None
+        #     csv_name = None
 
-            payload = csv_to_agent_payload(file.path, file.name)
-            user_payload_parts.append(payload)
+        #     if files:
+        #         file = files[0]
+        #         file_ext = os.path.splitext(file.name)[1].lower()
+        #         if file_ext == ".csv":
+        #             csv_path = file.path
+        #             csv_name = file.name
+        #         else:
+        #             # Option A: reject non-csv
+        #             await cl.Message(content=f"File type '{file_ext}' is not supported for graph drawing. Upload a .csv or send text only.").send()
+        #             return
+        #             # Option B: ignore non-csv and proceed with text-only:
+        #             # pass
 
-            await cl.Message(
-                content=f"Received CSV: **{file.name}**. Sent summary + up to {MAX_ROWS_TO_SEND} sample rows to agent."
-            ).send()
+        #     await out.stream_token("📊 Creating chart...\n")
 
+        #     new_conv_id, local_path, gen_name, response_text = run_graph_drawer(
+        #         openai_client=openai_client,
+        #         agent_name=agent_name,
+        #         conversation_id=conversation_id,
+        #         user_text=text,
+        #         csv_path=csv_path,
+        #         csv_filename=csv_name,
+        #     )
+        #     cl.user_session.set("conversation_id", new_conv_id)
 
-        user_payload = "\n\n".join(user_payload_parts).strip()
-        if not user_payload:
-            # This should be rare, but keep it safe
-            await cl.Message(content="Nothing to send.").send()
-            return
+        #     if response_text:
+        #         out.content = response_text
+        #         await out.update()
 
+        #     if local_path and os.path.exists(local_path):
+        #         await cl.Message(
+        #             content="",
+        #             elements=[chainlit_file_from_local(local_path)],
+        #         ).send()
+        #     # else:
+        #         # await cl.Message(
+        #         #     content="No downloadable chart file was generated. Try asking for a specific chart type and fields, "
+        #         #             "or upload a CSV."
+        #         # ).send()
+
+        #     return  # IMPORTANT: do not continue normal chat logic
+        
+        # --- otherwise: continue your normal logic below ---
         # --- Create or continue conversation ---
         if not conversation_id:
             conversation = openai_client.conversations.create(
-                items=[{"type": "message", "role": "user", "content": user_payload}],
+                items=[{"type": "message", "role": "user", "content": text}],
             )
             conversation_id = conversation.id
             cl.user_session.set("conversation_id", conversation_id)
         else:
             openai_client.conversations.items.create(
                 conversation_id=conversation_id,
-                items=[{"type": "message", "role": "user", "content": user_payload}],
+                items=[{"type": "message", "role": "user", "content": text}],
             )
 
         final_parts: list[str] = []
-
-        logger.info("[DEV-LOG] Conversation_id=%s", conversation_id)
-        logger.info("[DEV-LOG] Session_id=%s", cl.user_session.get("id"))
-        logger.info("[DEV-LOG] Thread_id=%s", cl.context.session.thread_id)
 
         # --- Stream response ---
         with openai_client.responses.create(
             conversation=conversation_id,
             extra_body={"agent": {"name": agent_name, "type": "agent_reference"}},
-            input="",   # ok because we already wrote the user message into the conversation
+            input="",
             stream=True,
         ) as events:
             for event in events:
@@ -266,27 +283,26 @@ async def on_message(message: cl.Message):
 
         out.content = "".join(final_parts) or out.content
         await out.update()
-
     except Exception as e:
+        if 'APIError' in str(type(e)):
+            if 'fabric' in agent_name.lower():
+                logger.error("Fabric agents are not supported in this demo. Only user-authenticated are supported.")
+                await out.stream_token("\n\n⚠️ Error: Fabric agents are not supported in this demo.")
+                out.content = (out.content or "") + "\n\n⚠️ Error: Fabric agents are not supported in this demo."
+                await out.update()
+                return
         logger.exception("Error handling message.")
         await out.stream_token(f"\n\n⚠️ Error: {type(e).__name__}: {e}")
         out.content = (out.content or "") + f"\n\n⚠️ Error: {type(e).__name__}: {e}"
         await out.update()
 
-# @cl.on_chat_resume
-# async def on_chat_resume(thread: ThreadDict):
-#     logger.info("Resuming chat thread %s", thread.id)
-#     pass
-#     # thread is a ThreadDict loaded from your persistence layer
-#     meta = (thread.get("metadata") or {})
-#     conv_id = meta.get("conversation_id")
-#     agent_name = meta.get("agent_name")
 
-#     if conv_id:
-#         cl.user_session.set("conversation_id", conv_id)
-#     if agent_name:
-#         cl.user_session.set("agent_name", agent_name)
+    # Chat Stop
+@cl.on_stop
+def on_stop():
+    logger.info(f"The user wants to stop the task!")
 
-@cl.on_chat_resume
-async def on_chat_resume(thread: ThreadDict):
-    logger.info("Resuming chat thread %s", thread.id)
+# Chat End
+@cl.on_chat_end
+def on_chat_end():
+    logger.info(f"The user disconnected!")

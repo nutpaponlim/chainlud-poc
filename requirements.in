@@ -1,5 +1,5 @@
 # Azure Agent package (exact version)
-azure-ai-agents==1.2.0b5
+azure-ai-projects==2.0.0b3
 azure-storage-blob
 azure-cosmos
 six
@@ -18,3 +18,11 @@ pydantic-settings
 chainlit
 agent-framework-core
 agent-framework-azure-ai
+
+asyncpg 
+SQLAlchemy 
+azure-identity 
+azure-storage-file-datalake 
+aiohttp 
+greenlet
+psycopg2

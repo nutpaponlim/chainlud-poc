@@ -26,9 +26,11 @@ class Settings(BaseModel):
     APP_AZURE_STORAGE_ACCESS_KEY: str = os.getenv("APP_AZURE_STORAGE_ACCESS_KEY", "")
 
     # Azure Cosmos DB
-    Azure_Cosmos_Endpoint: str = os.getenv("Azure_Cosmos_Endpoint", "")
-    Azure_Cosmos_KEY: str = os.getenv("Azure_Cosmos_KEY", "")
-    Azuredb: str = os.getenv("Azuredb", "")
+    # Azure_Cosmos_Endpoint: str = os.getenv("Azure_Cosmos_Endpoint", "")
+    # Azure_Cosmos_KEY: str = os.getenv("Azure_Cosmos_KEY", "")
+    # Azuredb: str = os.getenv("Azuredb", "")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+
 
     # OpenTelemetry
     ENABLE_OTEL_CONSOLE: bool = os.getenv("ENABLE_OTEL_CONSOLE") == True

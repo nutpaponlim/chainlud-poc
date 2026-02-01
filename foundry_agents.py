@@ -28,10 +28,11 @@ def list_agent_names(limit: int = 30) -> list[str]:
     with AIProjectClient(endpoint=settings.PROJECT_ENDPOINT, credential=credential) as project:
         names = []
         for a in project.agents.list():
-            names.append(a)
-            # print(a)
-            if len(names) >= limit:
-                break
+            if a.name != "graph-drawer":
+                names.append(a)
+                # print(a)
+                if len(names) >= limit:
+                    break
         # return names
         return names
 
