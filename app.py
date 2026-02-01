@@ -15,6 +15,7 @@ from foundry_agents import list_agent_names
 import chainlit as cl
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from chainlit.data.storage_clients.azure import AzureStorageClient
+from data_layer import upsert_thread_metadata
 
 from file_handler import csv_to_agent_payload, MAX_ROWS_TO_SEND
 # from healper_plot_csv import run_graph_drawer, chainlit_file_from_local
@@ -160,14 +161,16 @@ async def on_chat_start():
         # Optionally store convenience fields in the session
         if user:
             cl.user_session.set("user_id", user.identifier)
-            cl.user_session.set("role", (user.metadata or {}).get("role"))
+            cl.user_session.set("role", 'admin' if user.identifier == 'admin' else 'user')
 
         agent_name = cl.user_session.get("chat_profile")
         if not agent_name:
             agent_name = settings.DEFAULT_AGENT_NAME
 
         cl.user_session.set("agent_name", agent_name)
-        cl.user_session.set("conversation_id", None)
+        # cl.user_session.set("conversation_id", None)
+        if cl.user_session.get("conversation_id") is None:
+            cl.user_session.set("conversation_id", None)
 
         await cl.Message(content=f"Starting chat using **{agent_name}**").send()
 
@@ -189,6 +192,14 @@ async def on_message(message: cl.Message):
     if not agent_name:
         await cl.Message("No agent selected.").send()
         return
+    
+    user_id = cl.user_session.get("user_id")
+    user_role = cl.user_session.get("role")
+    logger.warning(f"Chatting by user '{user_id}','{user_role}'.")
+    app_metadata={
+        "app_user_role": user_role,
+        "app_user_id": user_id 
+    }
 
     conversation_id = cl.user_session.get("conversation_id")
     out = await cl.Message(content="").send()
@@ -256,14 +267,16 @@ async def on_message(message: cl.Message):
         if not conversation_id:
             conversation = openai_client.conversations.create(
                 items=[{"type": "message", "role": "user", "content": text}],
+                metadata=app_metadata
             )
             conversation_id = conversation.id
+            input_message = ""
             cl.user_session.set("conversation_id", conversation_id)
-        else:
-            openai_client.conversations.items.create(
-                conversation_id=conversation_id,
-                items=[{"type": "message", "role": "user", "content": text}],
-            )
+
+            # ✅ persist for resume
+            await upsert_thread_metadata({"azure_conversation_id": conversation_id})
+        if conversation_id:
+            input_message = text
 
         final_parts: list[str] = []
 
@@ -271,7 +284,7 @@ async def on_message(message: cl.Message):
         with openai_client.responses.create(
             conversation=conversation_id,
             extra_body={"agent": {"name": agent_name, "type": "agent_reference"}},
-            input="",
+            input=input_message,
             stream=True,
         ) as events:
             for event in events:
@@ -296,6 +309,17 @@ async def on_message(message: cl.Message):
         out.content = (out.content or "") + f"\n\n⚠️ Error: {type(e).__name__}: {e}"
         await out.update()
 
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict):
+    metadata = thread.get("metadata", {})
+    conversation_id = metadata.get("azure_conversation_id")
+
+    if conversation_id:
+        cl.user_session.set("conversation_id", conversation_id)
+        logger.info(f"Resumed Azure conversation: {conversation_id}")
+    else:
+        logger.info("No previous Azure conversation found.")
 
     # Chat Stop
 @cl.on_stop
